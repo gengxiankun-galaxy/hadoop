@@ -1,0 +1,14 @@
+---
+# defaults file for hadoop
+
+OPT_PATH: /opt/ga
+HADOOP_VERSION: 3.2.1
+HADOOP_URL: "https://www.apache.org/dist/hadoop/common/hadoop-{{ HADOOP_VERSION }}/hadoop-{{ HADOOP_VERSION }}.tar.gz"
+CLUSTER_NAME: test
+DFS_NAMENODE_NAME_DIR: ["/data2/dfs/nn", "/data3/dfs/nn"]
+DFS_DATANODE_DATA_DIR: ["/data2/dfs/dn", "/data3/dfs/dn"]
+YARN_NODEMANAGER_REMOTE_APP_LOG_DIR: /var/log/hadoop-yarn/apps
+YARN_NODEMANAGER_LOCAL_DIRS: ["/data2/yarn/local", "/data3/yarn/local"]
+YARN_NODEMANAGER_LOG_DIRS: ["/data2/yarn/logs", "/data3/yarn/logs"]
+HADOOP_SOFT_NOFILE: 200001
+HADOOP_HARD_NOFILE: 200002

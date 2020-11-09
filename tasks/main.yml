@@ -1,0 +1,175 @@
+---
+
+- name: 获取是否以安装 hadoop
+  shell: "hadoop version"
+  register: hadoop_exists
+  ignore_errors: yes
+  tags: always
+
+- block:
+    - name: 设置 hostname
+      shell: "hostnamectl set-hostname {{ HOSTNAME }}"
+
+    - name: 配置 /etc/hosts
+      lineinfile: dest=/etc/hosts line="{{ hostvars[item]['ansible_ssh_host'] }} {{ hostvars[item]['HOSTNAME'] }}"
+      with_items: "{{ groups['bigdata-cluster'] }}"
+
+    - name: linux 文件数量优化
+      lineinfile: dest=/etc/security/limits.conf line="{{ item }}"
+      with_items:
+        - "* soft nofile {{ HADOOP_SOFT_NOFILE }}"
+        - "* hard nofile {{ HADOOP_HARD_NOFILE }}"
+        - "root soft nofile {{ HADOOP_SOFT_NOFILE }}"
+        - "root hard nofile {{ HADOOP_HARD_NOFILE }}"
+        - "* - nofile {{ HADOOP_HARD_NOFILE }}"
+  tags: system_opt
+
+- block:
+    - name: 导入 GPG KEYS
+      shell: 'curl -O https://dist.apache.org/repos/dist/release/hadoop/common/KEYS \
+        && gpg --import KEYS'
+
+    - name: 下载 hadoop 二进制包
+      shell: 'curl -fSL "{{ HADOOP_URL }}" -o /tmp/hadoop.tar.gz \
+        && curl -fSL "{{ HADOOP_URL }}.asc" -o /tmp/hadoop.tar.gz.asc \
+        && gpg --verify /tmp/hadoop.tar.gz.asc \
+        && tar -xvf /tmp/hadoop.tar.gz -C {{ OPT_PATH }}/hadoop/ \
+        && rm /tmp/hadoop.tar.gz*'
+
+    - name: 设置环境变量
+      lineinfile: dest=/etc/bashrc line="{{ item }}"
+      with_items:
+        - "export HADOOP_HOME={{ OPT_PATH }}/hadoop/hadoop-{{ HADOOP_VERSION }}"
+        - "export PATH=$HADOOP_HOME/bin/:$PATH"
+        - "export HADOOP_CONF_DIR=/etc/hadoop"
+        - "export HADOOP_LOG_DIR={{ OPT_PATH }}/hadoop/logs"
+  tags: download_hadoop
+  when: hadoop_exists.failed == true
+
+- block:
+    - name: 重置 hadoop 默认配置
+      copy: src=files/hadoop/conf/ dest=/etc/hadoop/
+
+    - name: 配置环境变量
+      copy: src=files/hadoop.env dest={{ OPT_PATH }}/hadoop/hadoop.env
+
+    - name: 部署配置脚本
+      template: src=configure.sh.j2 dest={{ OPT_PATH }}/hadoop/configure.sh
+
+    - name: 执行配置脚本
+      script: "{{ OPT_PATH }}/hadoop/configure.sh"
+
+    - name: 配置 slaves
+      copy: src=files/slaves dest=/etc/hadoop/slaves
+  tags: upgrade_configure
+
+- block:
+    - name: 获取 dfs namenode name dir 是否以格式化
+      shell: "ls -A {{ DFS_NAMENODE_NAME_DIR[0] }}"
+      register: is_format
+      ignore_errors: yes
+
+    - name: 创建 dfs namenode name dir
+      shell: "mkdir -vp {{ item }}"
+      with_items: "{{ DFS_NAMENODE_NAME_DIR }}"
+      when: is_format.stdout == "" 
+      ignore_errors: yes
+
+    - name: 分配 dfs namenode name dir 目录权限
+      shell: "chmod 700 {{ item }} && chown -R hdfs:hdfs {{ item }}"
+      with_items: "{{ DFS_NAMENODE_NAME_DIR }}"
+      when: is_format.stdout == ""
+      ignore_errors: yes
+  
+    - name: hdfs format
+      shell: "sudo -u hdfs $HADOOP_HOME/bin/hdfs --config $HADOOP_CONF_DIR namenode -format {{ CLUSTER_NAME }}"
+      when: is_format.stdout == ""
+  when: NAMENODE_ENABLE is defined and NAMENODE_ENABLE == "true" and hadoop_exists.failed == true
+
+- block:
+    - name: 停止 namenode
+      shell: 'su -s /bin/bash hdfs -c "$HADOOP_HOME/sbin/hadoop-daemon.sh --config $HADOOP_CONF_DIR stop namenode"'
+  when: NAMENODE_ENABLE is defined and NAMENODE_ENABLE == "true"
+  tags: stop,upgrade_configure
+
+- block:
+    - name: 启动 namenode
+      shell: 'su -s /bin/bash hdfs -c "$HADOOP_HOME/sbin/hadoop-daemon.sh --config $HADOOP_CONF_DIR start namenode"'
+  when: NAMENODE_ENABLE is defined and NAMENODE_ENABLE == "true"
+  tags: startup,upgrade_configure
+
+- block:
+    - name: 创建 dfs datanode data dir
+      shell: "mkdir -vp {{ item }}"
+      with_items: "{{ DFS_DATANODE_DATA_DIR }}"
+      ignore_errors: yes
+
+    - name: 分配 dfs datanode data dir 目录权限
+      shell: "chmod 700 {{ item }} && chown -R hdfs:hdfs {{ item }}"
+      with_items: "{{ DFS_DATANODE_DATA_DIR }}"
+      ignore_errors: yes
+
+    - name: 创建 yarn nodemanager local dirs
+      shell: "mkdir -vp {{ item }}"
+      with_items: "{{ YARN_NODEMANAGER_LOCAL_DIRS }}"
+      ignore_errors: yes
+
+    - name: 分配 yarn nodemanager local dirs 权限
+      shell: "chmod 700 {{ item }} && chown -R yarn:yarn {{ item }}"
+      with_items: "{{ YARN_NODEMANAGER_LOCAL_DIRS }}"
+      ignore_errors: yes
+
+    - name: 创建 yarn nodemanager log dirs
+      shell: "mkdir -vp {{ item }}"
+      with_items: "{{ YARN_NODEMANAGER_LOG_DIRS }}"
+      ignore_errors: yes
+
+    - name: 分配 yarn nodemanager log dirs 权限
+      shell: "chmod 700 {{ item }} && chown -R yarn:yarn {{ item }}"
+      with_items: "{{ YARN_NODEMANAGER_LOG_DIRS }}"
+      ignore_errors: yes
+  when: DATANODE_ENABLE is defined and DATANODE_ENABLE == "true" and hadoop_exists.failed == true
+
+- block:
+    - name: 停止 datanode
+      shell: 'su -s /bin/bash hdfs -c "$HADOOP_HOME/sbin/hadoop-daemon.sh --config $HADOOP_CONF_DIR stop datanode"'
+
+    - name: 停止 nodemanager
+      shell: 'su -s /bin/bash yarn -c "$HADOOP_HOME/sbin/yarn-daemon.sh --config $HADOOP_CONF_DIR stop nodemanager"'
+  tags: stop,upgrade_configure
+
+- block:
+    - name: 启动 datanode
+      shell: 'su -s /bin/bash hdfs -c "$HADOOP_HOME/sbin/hadoop-daemon.sh --config $HADOOP_CONF_DIR start datanode"'
+
+    - name: 启动 nodemanager
+      shell: 'su -s /bin/bash yarn -c "$HADOOP_HOME/sbin/yarn-daemon.sh --config $HADOOP_CONF_DIR start nodemanager"'
+  tags: startup,upgrade_configure
+
+- block:
+    - name: 分配 jobhistory、yarn 的目录和权限
+      shell: "sudo -u hdfs hadoop fs -mkdir -p /user/history &&\
+        sudo -u hdfs hadoop fs -chmod -R 1777 /user/history &&\
+        sudo -u hdfs hadoop fs -chown mapred:hadoop /user/history &&\
+        sudo -u hdfs hadoop fs -mkdir -p /var/log/hadoop-yarn &&\
+        sudo -u hdfs hadoop fs -chown yarn:mapred /var/log/hadoop-yarn &&\
+        sudo -u hdfs hadoop fs -mkdir /tmp &&\
+        sudo -u hdfs hadoop fs -chmod -R 1777 /tmp"
+      ignore_errors: yes
+  when: NAMENODE_ENABLE is defined and NAMENODE_ENABLE == "true" and hadoop_exists.failed == true
+
+- block:
+    - name: 停止 historyserver
+      shell: 'su -s /bin/bash mapred -c "$HADOOP_HOME/sbin/mr-jobhistory-daemon.sh --config $HADOOP_CONF_DIR stop historyserver"'
+
+    - name: 停止 resourcemanager
+      shell: 'su -s /bin/bash yarn -c "$HADOOP_HOME/sbin/yarn-daemon.sh --config $HADOOP_CONF_DIR stop resourcemanager"'
+  tags: stop,upgrade_configure
+
+- block:
+    - name: 启动 historyserver
+      shell: 'su -s /bin/bash mapred -c "$HADOOP_HOME/sbin/mr-jobhistory-daemon.sh --config $HADOOP_CONF_DIR start historyserver"'
+
+    - name: 启动 resourcemanager
+      shell: 'su -s /bin/bash yarn -c "$HADOOP_HOME/sbin/yarn-daemon.sh --config $HADOOP_CONF_DIR start resourcemanager"'
+  tags: startup,upgrade_configure
