@@ -37,8 +37,13 @@
       shell: 'curl -fSL "{{ HADOOP_URL }}" -o /tmp/hadoop.tar.gz \
         && curl -fSL "{{ HADOOP_URL }}.asc" -o /tmp/hadoop.tar.gz.asc \
         && gpg --verify /tmp/hadoop.tar.gz.asc \
-        && tar -xvf /tmp/hadoop.tar.gz -C {{ OPT_PATH }}/hadoop/ \
+        && tar --no-same-owner -xvf /tmp/hadoop.tar.gz -C {{ OPT_PATH }}/hadoop/ \
+        && chmod -R a+x {{ OPT_PATH }}/hadoop/hadoop-{{ HADOOP_VERSION }} \
         && rm /tmp/hadoop.tar.gz*'
+
+    - name: 创建 logs
+      shell: 'mkdir -vp {{ OPT_PATH }}/hadoop/hadoop-{{ HADOOP_VERSION }}/logs \
+        && chmod 777 {{ OPT_PATH }}/hadoop/hadoop-{{ HADOOP_VERSION }}/logs'
 
     - name: 布置 hadoop 配置
       shell: 'ln -s {{ OPT_PATH }}/hadoop/hadoop-{{ HADOOP_VERSION }}/etc/hadoop /etc/hadoop'
@@ -49,7 +54,7 @@
         - "export HADOOP_HOME={{ OPT_PATH }}/hadoop/hadoop-{{ HADOOP_VERSION }}"
         - "export PATH=$HADOOP_HOME/bin/:$PATH"
         - "export HADOOP_CONF_DIR=/etc/hadoop"
-        - "export HADOOP_LOG_DIR={{ OPT_PATH }}/hadoop/logs"
+        - "export HADOOP_LOG_DIR={{ OPT_PATH }}/hadoop/hadoop-{{ HADOOP_VERSION }}/logs"
   tags: download_hadoop
   when: hadoop_exists.failed == true
 
@@ -164,6 +169,7 @@
     - name: 停止 nodemanager
       shell: 'su -s /bin/bash yarn -c "$HADOOP_HOME/sbin/yarn-daemon.sh --config $HADOOP_CONF_DIR stop nodemanager"'
   tags: stop,upgrade_configure
+  when: DATANODE_ENABLE is defined and DATANODE_ENABLE == "true"
 
 - block:
     - name: 启动 datanode
@@ -172,6 +178,7 @@
     - name: 启动 nodemanager
       shell: 'su -s /bin/bash yarn -c "$HADOOP_HOME/sbin/yarn-daemon.sh --config $HADOOP_CONF_DIR start nodemanager"'
   tags: startup,upgrade_configure
+  when: DATANODE_ENABLE is defined and DATANODE_ENABLE == "true"
 
 - block:
     - name: 分配 jobhistory、yarn 的目录和权限
@@ -192,6 +199,7 @@
     - name: 停止 resourcemanager
       shell: 'su -s /bin/bash yarn -c "$HADOOP_HOME/sbin/yarn-daemon.sh --config $HADOOP_CONF_DIR stop resourcemanager"'
   tags: stop,upgrade_configure
+  when: NAMENODE_ENABLE is defined and NAMENODE_ENABLE == "true"
 
 - block:
     - name: 启动 historyserver
@@ -200,3 +208,29 @@
     - name: 启动 resourcemanager
       shell: 'su -s /bin/bash yarn -c "$HADOOP_HOME/sbin/yarn-daemon.sh --config $HADOOP_CONF_DIR start resourcemanager"'
   tags: startup,upgrade_configure
+  when: NAMENODE_ENABLE is defined and NAMENODE_ENABLE == "true"
+
+- block:
+    - name: 删除部署&配置目录
+      shell: 'rm -rf {{ OPT_PATH }}/hadoop && rm -rf /etc/hadoop'
+
+    - name: 删除相关用户
+      shell: 'userdel {{ item }}'
+      with_items:
+        - hdfs
+        - yarn
+        - mapred
+
+    - name: 删除相关用户组
+      shell: 'groupdel hadoop'
+
+    - name: 删除 namenode 数据目录
+      shell: 'rm -rf {{ item }}'
+      with_items: "{{ DFS_NAMENODE_NAME_DIR }}"
+      when:  NAMENODE_ENABLE is defined and NAMENODE_ENABLE == "true"
+
+    - name: 删除 datanode 数据目录
+      shell: 'rm -rf {{ item }}'
+      with_items: "{{ DFS_DATANODE_DATA_DIR }}"
+      when: DATANODE_ENABLE is defined and DATANODE_ENABLE == "true"
+  tags: never, cleanup
