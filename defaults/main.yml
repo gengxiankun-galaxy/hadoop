@@ -12,3 +12,4 @@ YARN_NODEMANAGER_LOCAL_DIRS: ["/data2/yarn/local", "/data3/yarn/local"]
 YARN_NODEMANAGER_LOG_DIRS: ["/data2/yarn/logs", "/data3/yarn/logs"]
 HADOOP_SOFT_NOFILE: 200001
 HADOOP_HARD_NOFILE: 200002
+JAVA_HOME: /opt/ga/java/jdk1.8.0_111
